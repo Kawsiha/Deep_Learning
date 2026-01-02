@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>YOLOv8 Object Detection</title>
+  <style>
+    :root {
+      --primary: #1e88e5;
+      --primary-dark: #1565c0;
+      --bg-light: #f4f6f9;
+      --bg-dark: #121212;
+      --text-light: #333;
+      --text-dark: #eee;
+      --card-light: #fff;
+      --card-dark: #1e1e1e;
+      --border-light: #ddd;
+      --border-dark: #444;
+    }
+
+    body {
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: var(--bg-light);
+      color: var(--text-light);
+      transition: background 0.3s, color 0.3s;
+    }
+
+    body.dark {
+      background: var(--bg-dark);
+      color: var(--text-dark);
+    }
+
+    header {
+      background: var(--primary);
+      color: white;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+      position: relative;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 30px auto;
+      background: var(--card-light);
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      transition: background 0.3s, color 0.3s;
+    }
+
+    body.dark .container {
+      background: var(--card-dark);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 15px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    button, input[type="file"] {
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 10px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+
+    button:hover, input[type="file"]:hover {
+      background: var(--primary-dark);
+    }
+
+    canvas, video {
+      display: block;
+      margin: 0 auto;
+      border: 2px solid var(--border-light);
+      border-radius: 6px;
+      max-width: 100%;
+      transition: border 0.3s;
+    }
+
+    body.dark canvas, body.dark video {
+      border: 2px solid var(--border-dark);
+    }
+
+    #results {
+      margin-top: 20px;
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text-light);
+      background: #f1f8ff;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #cce0ff;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    body.dark #results {
+      background: #1e3a5f;
+      color: var(--text-dark);
+      border: 1px solid #3a6fb0;
+    }
+
+    .theme-toggle {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: transparent;
+      border: 2px solid white;
+      border-radius: 20px;
+      padding: 6px 12px;
+      color: white;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    .theme-toggle:hover {
+      background: rgba(255,255,255,0.2);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>YOLOv8 Object Detection Demo</h1>
+    <button class="theme-toggle" id="themeToggle">🌙 Dark Mode</button>
+  </header>
+
+  <div class="container">
+    <div class="controls">
+      <button id="openWebcam">Open Webcam</button>
+      <button id="capture">Capture Image</button>
+      <input type="file" id="fileInput" accept="image/*" />
+    </div>
+
+    <video id="webcam" autoplay playsinline width="640" height="480" style="display:none;"></video>
+    <canvas id="canvas" width="640" height="480"></canvas>
+    <div id="results">Detections will appear here...</div>
+  </div>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const fileInput = document.getElementById('fileInput');
+    const openWebcamBtn = document.getElementById('openWebcam');
+    const captureBtn = document.getElementById('capture');
+    const resultsDiv = document.getElementById('results');
+    const themeToggle = document.getElementById('themeToggle');
+
+    themeToggle.onclick = () => {
+      document.body.classList.toggle('dark');
+      themeToggle.textContent = document.body.classList.contains('dark') ? "☀️ Light Mode" : "🌙 Dark Mode";
+    };
+
+    openWebcamBtn.onclick = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        video.style.display = 'block';
+      } catch (err) {
+        alert('Webcam error: ' + err.message);
+      }
+    };
+
+    captureBtn.onclick = async () => {
+      if (!video.srcObject) {
+        alert('Open the webcam first.');
+        return;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg');
+      await runDetection(dataUrl);
+    };
+
+    fileInput.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = async () => {
+          video.style.display = 'none';
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          const ratio = Math.min(canvas.width / img.width, canvas.height / img.height);
+          const newW = img.width * ratio;
+          const newH = img.height * ratio;
+          const offsetX = (canvas.width - newW) / 2;
+          const offsetY = (canvas.height - newH) / 2;
+
+          ctx.drawImage(img, offsetX, offsetY, newW, newH);
+          await runDetection(ev.target.result);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    };
+
+    async function runDetection(base64Image) {
+      resultsDiv.textContent = 'Detecting...';
+
+      try {
+        const res = await fetch('http://127.0.0.1:5000/detect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: base64Image })
+        });
+        const data = await res.json();
+        if (data.error) {
+          resultsDiv.textContent = 'Error: ' + data.error;
+          return;
+        }
+
+        const img = new Image();
+        img.onload = () => {
+          const scaleX = canvas.width / img.width;
+          const scaleY = canvas.height / img.height;
+
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          ctx.lineWidth = 2;
+          ctx.font = '14px Arial';
+
+          for (let i = 0; i < data.boxes.length; i++) {
+            let [x1, y1, x2, y2] = data.boxes[i];
+            x1 *= scaleX; x2 *= scaleX;
+            y1 *= scaleY; y2 *= scaleY;
+
+            const label = data.labels[i];
+            const score = (data.scores[i] * 100).toFixed(1);
+
+            ctx.strokeStyle = '#00e676';
+                        ctx.strokeStyle = '#00e676';
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(x1, y1 - 18, ctx.measureText(`${label} ${score}%`).width + 8, 18);
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`${label} ${score}%`, x1 + 4, y1 - 5);
+          }
+
+          // Count detections
+          const counts = {};
+          for (let label of data.labels) {
+            counts[label] = (counts[label] || 0) + 1;
+          }
+
+          const summary = Object.entries(counts)
+            .map(([label, count]) => `${label} - ${count}`)
+            .join(', ');
+
+          resultsDiv.textContent = `Detections: ${summary}`;
+        };
+        img.src = base64Image;
+      } catch (err) {
+        resultsDiv.textContent = 'Detection failed: ' + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
